@@ -232,5 +232,41 @@ class WebTests(unittest.TestCase):
         self.assertIn("Article 10", r.get_data(as_text=True))
 
 
+class BootstrapTests(unittest.TestCase):
+    def test_bootstrap_creates_once_and_password_change(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from look.web import bootstrap_users, create_app
+
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "b.db")
+            store = Store(db)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                bootstrap_users(store, "sam:requester, rev:reviewer, bad:admin")
+                bootstrap_users(store, "sam:requester")
+            text = out.getvalue()
+            self.assertEqual(text.count("created"), 2)
+            self.assertIn("skipping", text)
+            pw = re.search(r"'sam' with password (\S+)", text).group(1)
+            store.db.close()
+
+            app = create_app(db_path=db, adapters=mock_adapters(), secret_key="t")
+            app.config["SESSION_COOKIE_SECURE"] = False
+            c = app.test_client()
+            c.get("/login")
+            with c.session_transaction() as s:
+                t = s["csrf"]
+            self.assertEqual(c.post("/login", data={"csrf": t, "username": "sam", "password": pw}).status_code, 302)
+            r = c.post("/account", data={"csrf": t, "current_password": pw, "new_password": "a brand new password"})
+            self.assertIn("Password changed", r.get_data(as_text=True))
+            c.post("/logout", data={"csrf": t})
+            c.get("/login")
+            with c.session_transaction() as s:
+                t = s["csrf"]
+            self.assertEqual(c.post("/login", data={"csrf": t, "username": "sam", "password": pw}).status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

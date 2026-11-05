@@ -17,3 +17,6 @@ services:
         generateValue: true
       - key: LOOK_RETENTION_DAYS
         value: "180"
+      # First logins; each gets a random password printed once in the logs.
+      - key: LOOK_BOOTSTRAP_USERS
+        value: sam:requester,sam-reviewer:reviewer

@@ -36,6 +36,23 @@ def add_user(store: Store, username: str, password: str, role: str) -> None:
     store.audit("admin", "user.saved", None, username=username, role=role)
 
 
+def bootstrap_users(store: Store, spec: str) -> None:
+    """Create first logins from LOOK_BOOTSTRAP_USERS="alice:requester,bob:reviewer".
+
+    Each missing user gets a random password, printed once to the server log.
+    Users who already exist are left alone, so restarts change nothing.
+    """
+    for item in filter(None, (x.strip() for x in spec.split(","))):
+        username, _, role = item.partition(":")
+        if role not in ROLES:
+            print(f"[look] skipping bootstrap user {item!r}: role must be one of {ROLES}", flush=True)
+            continue
+        password = secrets.token_urlsafe(12)
+        if store.create_user_if_missing(username, role, generate_password_hash(password)):
+            store.audit("bootstrap", "user.saved", None, username=username, role=role)
+            print(f"[look] created {role} login '{username}' with password {password} (change it at /account)", flush=True)
+
+
 def label(value: str) -> str:
     return value.replace("_", " ").capitalize()
 
@@ -63,6 +80,10 @@ def create_app(
         from werkzeug.middleware.proxy_fix import ProxyFix
 
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    if os.environ.get("LOOK_BOOTSTRAP_USERS"):
+        st = Store(app.config["DB"])
+        bootstrap_users(st, os.environ["LOOK_BOOTSTRAP_USERS"])
+        st.db.close()
     adapter_list = adapters if adapters is not None else default_adapters(app.config["REGION"].value)
 
     def svc() -> ScreeningService:
@@ -157,6 +178,24 @@ def create_app(
     def logout():
         session.clear()
         return redirect(url_for("home"))
+
+    @app.route("/account", methods=["GET", "POST"])
+    def account():
+        if not session.get("user"):
+            return redirect(url_for("login", next="/account"))
+        if request.method == "POST":
+            st = svc().store
+            role, pw_hash = st.get_user(session["user"])
+            new = request.form.get("new_password", "")
+            if not check_password_hash(pw_hash, request.form.get("current_password", "")):
+                flash("Your current password is wrong.")
+            elif len(new) < 10:
+                flash("Use a new password of at least 10 characters.")
+            else:
+                st.save_user(session["user"], role, generate_password_hash(new))
+                st.audit(session["user"], "user.password_changed", None)
+                flash("Password changed.")
+        return render_template("account.html")
 
     # requester --------------------------------------------------------------
 
@@ -357,7 +396,7 @@ code{word-break:break-all;background:var(--bg);padding:2px 4px;border-radius:4px
 .pill{display:inline-block;padding:1px 8px;border-radius:99px;border:1px solid var(--line);font-size:13px}
 </style></head><body>
 <header><a href="/">look</a>
-{% if user %}<form method="post" action="/logout" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><span class="muted">{{ user }} · </span><button class="link">Log out</button></form>{% endif %}
+{% if user %}<form method="post" action="/logout" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf }}"><a class="muted" href="/account" style="font-weight:400">{{ user }}</a><span class="muted"> · </span><button class="link">Log out</button></form>{% endif %}
 </header><main>
 {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
 {% block body %}{% endblock %}</main></body></html>""",
@@ -376,6 +415,11 @@ Every search is logged, and the person can read their report, see who checked th
 <label>Username<input type="text" name="username" autocomplete="username" required></label>
 <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
 <p><button>Log in</button></p></form></div>{% endblock %}""",
+    "account.html": """{% extends "base.html" %}{% block title %}Account{% endblock %}{% block body %}
+<div class="card"><h1>Change password</h1><form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Current password<input type="password" name="current_password" autocomplete="current-password" required></label>
+<label>New password (10 characters or more)<input type="password" name="new_password" autocomplete="new-password" required></label>
+<p><button>Change password</button></p></form></div>{% endblock %}""",
     "dashboard.html": """{% extends "base.html" %}{% block title %}Your checks{% endblock %}{% block body %}
 <div style="display:flex;justify-content:space-between;align-items:center"><h1>Your checks</h1><a href="/requests/new"><button>New check</button></a></div>
 <div class="card">{% if rows %}<table><tr><th>Person</th><th>Purpose</th><th>State</th><th>Created</th></tr>
