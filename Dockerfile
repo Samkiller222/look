@@ -6,6 +6,5 @@ RUN pip install --no-cache-dir ".[web]"
 ENV LOOK_DB=/data/look.db
 VOLUME /data
 EXPOSE 8000
-RUN useradd -m look && mkdir -p /data && chown look /data
-USER look
+RUN mkdir -p /data
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "look.web:create_app()"]

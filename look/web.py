@@ -71,6 +71,18 @@ def create_app(
         if s is not None:
             s.store.db.close()
 
+    retention = os.environ.get("LOOK_RETENTION_DAYS")
+    last_purge = {"at": 0.0}
+
+    @app.before_request
+    def _daily_purge():
+        # Hosts without a cron job still delete reports past the retention period.
+        import time
+
+        if retention and time.time() - last_purge["at"] > 86400:
+            last_purge["at"] = time.time()
+            svc().purge_expired(retention_days=int(retention), actor="retention")
+
     @app.before_request
     def _csrf():
         session.setdefault("csrf", secrets.token_urlsafe(16))

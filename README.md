@@ -77,8 +77,22 @@ How it flows:
 4. A reviewer logs in to resolve disputes. An upheld dispute removes the
    finding from the report.
 
-To put it on the internet, run it behind HTTPS on any Python host (for an EU
-deployment, pick an EU region):
+### Putting it online
+
+GitHub Pages only serves static files, so it can't run the app itself: there
+is nowhere to keep logins, signatures, the audit log, or API keys. Split it:
+
+- **Public front page on GitHub Pages.** `docs/index.html` is a static page
+  explaining the service. In the repo's Settings > Pages, choose "Deploy from a
+  branch", pick this branch and the `/docs` folder. Then set `data-app` on the
+  "Open the app" button to your app's address.
+- **The app on a server in the EU.** `render.yaml` deploys it to Render in
+  Frankfurt with a persistent disk (New > Blueprint, then pick this repo).
+  Once it is up, open the service's Shell and create logins with
+  `python -m look user add --username you@example.com --role requester`.
+  `LOOK_RETENTION_DAYS` makes the app delete old reports once a day.
+
+Any other host that runs Docker works too, behind HTTPS:
 
 ```sh
 docker build -t look . && docker run -p 8000:8000 -v look-data:/data \

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>look screening</title>
+<meta name="description" content="Consent-based background screening from official public records.">
+<style>
+:root{--bg:#f7f7f5;--fg:#1c1c1a;--muted:#6b6b66;--card:#fff;--line:#e2e1dc;--accent:#2f5d50}
+@media (prefers-color-scheme:dark){:root{--bg:#171716;--fg:#ecebe6;--muted:#a3a29b;--card:#22221f;--line:#3a3935;--accent:#7fb7a5}}
+*{box-sizing:border-box}body{margin:0;font:17px/1.6 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:760px;margin:0 auto;padding:48px 16px}h1{font-size:2.2rem;line-height:1.2;margin:0 0 12px}
+.lead{color:var(--muted);font-size:1.15rem;margin:0 0 28px}
+.btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:32px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.card h3{margin:0 0 6px;font-size:1rem}.card p{margin:0;color:var(--muted);font-size:15px}
+ol{padding-left:20px}footer{color:var(--muted);font-size:14px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Background screening, only with the person's say-so</h1>
+  <p class="lead">look checks official public records about someone for a job, a lease, or a licence, after that person has read exactly what will be searched and signed to agree.</p>
+  <!-- Set data-app to your hosted app's address, for example https://look-xxxx.onrender.com -->
+  <a class="btn" id="open-app" data-app="" href="#how">Open the app</a>
+
+  <div class="grid">
+    <div class="card"><h3>Consent first</h3><p>Nothing runs until the person signs through their own private link. Saying no deletes their details.</p></div>
+    <div class="card"><h3>Official records only</h3><p>Sanctions lists, company registries and licensing boards. No social media, no people-search sites.</p></div>
+    <div class="card"><h3>No tracking data</h3><p>Never collects home addresses, phone numbers, family members, or location history.</p></div>
+    <div class="card"><h3>Your report, your rights</h3><p>The person sees their report and who checked them and why, can dispute mistakes, and can have their data erased.</p></div>
+  </div>
+
+  <h2 id="how">How it works</h2>
+  <ol>
+    <li>An organisation asks for a check and says why it is needed.</li>
+    <li>You get a link showing exactly which records will be searched. You sign, or decline.</li>
+    <li>The check runs against official public records. Anything found is a possible match until a person reviews it.</li>
+    <li>You get your own copy of the report, and can dispute anything that is wrong.</li>
+  </ol>
+
+  <footer>Follows GDPR rules for EU checks: a lawful basis is required, criminal-record checks need a law that authorises them, and reports are deleted after the retention period.</footer>
+</main>
+<script>
+  var a = document.getElementById('open-app');
+  if (a.dataset.app) { a.href = a.dataset.app; } else { a.textContent = 'Coming soon'; }
+</script>
+</body>
+</html>
