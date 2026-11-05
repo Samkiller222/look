@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS requests (
     id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, requester TEXT NOT NULL,
     consent_token TEXT NOT NULL UNIQUE, data TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY, role TEXT NOT NULL, password_hash TEXT NOT NULL
 );
@@ -167,6 +168,12 @@ class Store:
                 "INSERT OR IGNORE INTO users (username, role, password_hash) VALUES (?,?,?)",
                 (username.strip().lower(), role, password_hash),
             )
+        return cur.rowcount == 1
+
+    def claim_once(self, key: str) -> bool:
+        """True the first time a key is claimed, across all processes sharing the database."""
+        with self.db:
+            cur = self.db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?, '1')", (key,))
         return cur.rowcount == 1
 
     def get_user(self, username: str) -> tuple[str, str] | None:

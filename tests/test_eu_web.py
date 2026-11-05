@@ -256,6 +256,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(text.count("created"), 2)
             self.assertIn("skipping", text)
             pw = re.search(r"'sam' with password (\S+)", text).group(1)
+            self.assertRegex(pw, r"^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$")
             store.db.close()
 
             app = create_app(db_path=db, adapters=mock_adapters(), secret_key="t")
@@ -272,6 +273,35 @@ class BootstrapTests(unittest.TestCase):
             with c.session_transaction() as s:
                 t = s["csrf"]
             self.assertEqual(c.post("/login", data={"csrf": t, "username": "sam", "password": pw}).status_code, 200)
+
+
+class ResetTests(unittest.TestCase):
+    def test_reset_once_per_token_and_trailing_space_ok(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from look.web import bootstrap_users, create_app, reset_bootstrap_passwords
+
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "r.db")
+            store = Store(db)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                bootstrap_users(store, "sam:requester")
+                reset_bootstrap_passwords(store, "sam:requester", "t1")
+                reset_bootstrap_passwords(store, "sam:requester", "t1")
+            text = out.getvalue()
+            self.assertEqual(text.count("reset"), 1)
+            pw = re.search(r"to password (\S+)", text).group(1)
+            store.db.close()
+            app = create_app(db_path=db, adapters=mock_adapters(), secret_key="t")
+            app.config["SESSION_COOKIE_SECURE"] = False
+            c = app.test_client()
+            c.get("/login")
+            with c.session_transaction() as s:
+                t = s["csrf"]
+            r = c.post("/login", data={"csrf": t, "username": "Sam", "password": pw + " "})
+            self.assertEqual(r.status_code, 302)
 
 
 if __name__ == "__main__":

@@ -22,3 +22,6 @@ services:
       # First logins; each gets a random password printed once in the logs.
       - key: LOOK_BOOTSTRAP_USERS
         value: sam:requester,sam-reviewer:reviewer
+      # Change this value to give the bootstrap users new passwords (printed in the logs).
+      - key: LOOK_RESET_LOGINS
+        value: "2026-11-05-1"

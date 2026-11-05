@@ -47,10 +47,34 @@ def bootstrap_users(store: Store, spec: str) -> None:
         if role not in ROLES:
             print(f"[look] skipping bootstrap user {item!r}: role must be one of {ROLES}", flush=True)
             continue
-        password = secrets.token_urlsafe(12)
+        password = easy_password()
         if store.create_user_if_missing(username, role, generate_password_hash(password)):
             store.audit("bootstrap", "user.saved", None, username=username, role=role)
             print(f"[look] created {role} login '{username}' with password {password} (change it at /account)", flush=True)
+
+
+def easy_password() -> str:
+    """A random password that is easy to read and type on a phone: xxxx-xxxx-xxxx.
+
+    Lower case letters and digits only, without look-alikes (l, 1, o, 0).
+    About 62 bits of randomness.
+    """
+    alphabet = "abcdefghijkmnpqrstuvwxyz23456789"
+    return "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
+
+
+def reset_bootstrap_passwords(store: Store, spec: str, token: str) -> None:
+    """Give every bootstrap user a new password, once per LOOK_RESET_LOGINS value."""
+    if not store.claim_once(f"reset_logins:{token}"):
+        return
+    for item in filter(None, (x.strip() for x in spec.split(","))):
+        username, _, role = item.partition(":")
+        if role not in ROLES:
+            continue
+        password = easy_password()
+        store.save_user(username, role, generate_password_hash(password))
+        store.audit("bootstrap", "user.password_reset", None, username=username)
+        print(f"[look] reset {role} login '{username}' to password {password} (change it at /account)", flush=True)
 
 
 def label(value: str) -> str:
@@ -83,6 +107,8 @@ def create_app(
     if os.environ.get("LOOK_BOOTSTRAP_USERS"):
         st = Store(app.config["DB"])
         bootstrap_users(st, os.environ["LOOK_BOOTSTRAP_USERS"])
+        if os.environ.get("LOOK_RESET_LOGINS"):
+            reset_bootstrap_passwords(st, os.environ["LOOK_BOOTSTRAP_USERS"], os.environ["LOOK_RESET_LOGINS"])
         st.db.close()
     adapter_list = adapters if adapters is not None else default_adapters(app.config["REGION"].value)
 
@@ -163,7 +189,7 @@ def create_app(
         if request.method == "POST":
             username = request.form.get("username", "").strip().lower()  # phones often capitalise it
             row = svc().store.get_user(username)
-            if row and check_password_hash(row[1], request.form.get("password", "")):
+            if row and check_password_hash(row[1], request.form.get("password", "").strip()):
                 csrf = session.get("csrf")  # keep the form token across the login
                 session.clear()
                 session.update(user=username, role=row[0], csrf=csrf)
@@ -187,8 +213,8 @@ def create_app(
         if request.method == "POST":
             st = svc().store
             role, pw_hash = st.get_user(session["user"])
-            new = request.form.get("new_password", "")
-            if not check_password_hash(pw_hash, request.form.get("current_password", "")):
+            new = request.form.get("new_password", "").strip()
+            if not check_password_hash(pw_hash, request.form.get("current_password", "").strip()):
                 flash("Your current password is wrong.")
             elif len(new) < 10:
                 flash("Use a new password of at least 10 characters.")
