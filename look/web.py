@@ -161,16 +161,17 @@ def create_app(
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if request.method == "POST":
-            username = request.form.get("username", "").strip()
+            username = request.form.get("username", "").strip().lower()  # phones often capitalise it
             row = svc().store.get_user(username)
             if row and check_password_hash(row[1], request.form.get("password", "")):
-                csrf = session.get("csrf")
+                csrf = session.get("csrf")  # keep the form token across the login
                 session.clear()
                 session.update(user=username, role=row[0], csrf=csrf)
                 svc().store.audit(username, "user.login", None)
                 nxt = request.args.get("next", "")
                 return redirect(nxt if nxt.startswith("/") and not nxt.startswith("//") else url_for("home"))
             svc().store.audit(username or "<blank>", "user.login_failed", None)
+            print(f"[look] login failed for '{username}': {'wrong password' if row else 'no such user'}", flush=True)
             flash("Wrong username or password.")
         return render_template("login.html")
 

@@ -158,19 +158,19 @@ class Store:
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO users (username, role, password_hash) VALUES (?,?,?)",
-                (username, role, password_hash),
+                (username.strip().lower(), role, password_hash),
             )
 
     def create_user_if_missing(self, username: str, role: str, password_hash: str) -> bool:
         with self.db:
             cur = self.db.execute(
                 "INSERT OR IGNORE INTO users (username, role, password_hash) VALUES (?,?,?)",
-                (username, role, password_hash),
+                (username.strip().lower(), role, password_hash),
             )
         return cur.rowcount == 1
 
     def get_user(self, username: str) -> tuple[str, str] | None:
-        row = self.db.execute("SELECT role, password_hash FROM users WHERE username = ?", (username,)).fetchone()
+        row = self.db.execute("SELECT role, password_hash FROM users WHERE username = ?", (username.strip().lower(),)).fetchone()
         return (row[0], row[1]) if row else None
 
     # audit log --------------------------------------------------------------

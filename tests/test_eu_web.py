@@ -139,6 +139,12 @@ class WebTests(unittest.TestCase):
         self.assertEqual(r.status_code, 302)
         return t
 
+    def test_username_is_case_insensitive(self):
+        c = self.app.test_client()
+        t = self.csrf(c)
+        r = c.post("/login", data={"username": " HR ", "password": "correct horse battery", "csrf": t})
+        self.assertEqual(r.status_code, 302)
+
     def test_post_without_csrf_rejected(self):
         c = self.app.test_client()
         self.assertEqual(c.post("/login", data={"username": "hr", "password": "x"}).status_code, 400)
