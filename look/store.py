@@ -8,12 +8,19 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from .models import Consent, Dispute, Report, Subject, now
+from .models import Consent, Dispute, Report, ScreeningRequest, Subject, now
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS subjects (id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS consents (id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS requests (
+    id TEXT PRIMARY KEY, subject_id TEXT NOT NULL, requester TEXT NOT NULL,
+    consent_token TEXT NOT NULL UNIQUE, data TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY, role TEXT NOT NULL, password_hash TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS disputes (id TEXT PRIMARY KEY, report_id TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,6 +115,55 @@ class Store:
 
     def disputes_for_report(self, report_id: str) -> list[Dispute]:
         return [Dispute.from_dict(d) for d in self._where("disputes", "report_id", report_id)]
+
+    def save_request(self, r: ScreeningRequest) -> None:
+        self._put(
+            "requests", r.request_id, r.to_dict(),
+            subject_id=r.subject_id, requester=r.requester, consent_token=r.consent_token,
+        )
+
+    def get_request(self, request_id: str) -> ScreeningRequest | None:
+        d = self._get("requests", request_id)
+        return ScreeningRequest.from_dict(d) if d else None
+
+    def request_by_token(self, token: str) -> ScreeningRequest | None:
+        rows = self._where("requests", "consent_token", token)
+        return ScreeningRequest.from_dict(rows[0]) if rows else None
+
+    def requests_for(self, requester: str) -> list[ScreeningRequest]:
+        return [ScreeningRequest.from_dict(d) for d in self._where("requests", "requester", requester)]
+
+    def open_disputes(self) -> list[Dispute]:
+        rows = self.db.execute("SELECT data FROM disputes ORDER BY rowid")
+        return [d for d in (Dispute.from_dict(json.loads(r[0])) for r in rows) if d.status.value == "open"]
+
+    def reports_older_than(self, cutoff_iso: str) -> list[Report]:
+        rows = self.db.execute("SELECT data FROM reports ORDER BY rowid")
+        out = [Report.from_dict(json.loads(r[0])) for r in rows]
+        return [r for r in out if r.created_at.isoformat() < cutoff_iso]
+
+    def erase_subject(self, subject_id: str) -> None:
+        """Delete everything about a subject except the pseudonymous audit trail."""
+        report_ids = [r[0] for r in self.db.execute("SELECT id FROM reports WHERE subject_id = ?", (subject_id,))]
+        with self.db:
+            for rid in report_ids:
+                self.db.execute("DELETE FROM disputes WHERE report_id = ?", (rid,))
+            for table in ("reports", "consents", "requests"):
+                self.db.execute(f"DELETE FROM {table} WHERE subject_id = ?", (subject_id,))
+            self.db.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
+
+    # users ------------------------------------------------------------------
+
+    def save_user(self, username: str, role: str, password_hash: str) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO users (username, role, password_hash) VALUES (?,?,?)",
+                (username, role, password_hash),
+            )
+
+    def get_user(self, username: str) -> tuple[str, str] | None:
+        row = self.db.execute("SELECT role, password_hash FROM users WHERE username = ?", (username,)).fetchone()
+        return (row[0], row[1]) if row else None
 
     # audit log --------------------------------------------------------------
 

@@ -18,8 +18,11 @@ from .models import (
     Dispute,
     DisputeStatus,
     Finding,
+    LawfulBasis,
     PermissiblePurpose,
+    Region,
     Report,
+    ScreeningRequest,
     SourceResult,
     Subject,
     new_id,
@@ -37,6 +40,19 @@ STANDARD_DISCLOSURE = (
     "and may dispute anything in it you believe is inaccurate or incomplete. You may "
     "revoke this authorisation at any time before the check runs."
 )
+
+EU_DISCLOSURE = (
+    "{requester} (the controller) asks to run a background screening about you for the "
+    "purpose of {purpose}, on the GDPR lawful basis of {basis}{legal_ref}. It will search "
+    "only these official public records: {checks}. It will not collect your home address, "
+    "phone number, family members, location history, or social media. The report is kept "
+    "for {retention} days and then deleted. You have the right to access the report, to "
+    "have inaccurate data corrected (by disputing it), to have your data erased, to object, "
+    "and to complain to your national data protection authority. Signing confirms you have "
+    "read this notice and agree to the checks going ahead."
+)
+
+DEFAULT_RETENTION_DAYS = 180
 
 
 class AccessDenied(Exception):
@@ -57,12 +73,28 @@ class ScreeningService:
     # subjects and consent ---------------------------------------------------
 
     @staticmethod
-    def disclosure_for(requester: str, purpose: PermissiblePurpose, checks: list[CheckType]) -> str:
-        return STANDARD_DISCLOSURE.format(
+    def disclosure_for(
+        requester: str,
+        purpose: PermissiblePurpose,
+        checks: list[CheckType],
+        *,
+        region: Region = Region.US,
+        lawful_basis: LawfulBasis | None = None,
+        legal_reference: str | None = None,
+    ) -> str:
+        fields = dict(
             requester=requester,
             purpose=purpose.value.replace("_", " "),
             checks=", ".join(c.value.replace("_", " ") for c in checks),
         )
+        if region == Region.EU:
+            return EU_DISCLOSURE.format(
+                **fields,
+                basis=(lawful_basis.value if lawful_basis else "unspecified").replace("_", " "),
+                legal_ref=f" ({legal_reference})" if legal_reference else "",
+                retention=DEFAULT_RETENTION_DAYS,
+            )
+        return STANDARD_DISCLOSURE.format(**fields)
 
     def register_subject(self, subject: Subject, *, actor: str) -> Subject:
         self.store.save_subject(subject)
@@ -79,6 +111,9 @@ class ScreeningService:
         signed_name: str,
         valid_days: int = DEFAULT_CONSENT_DAYS,
         signed_at: datetime | None = None,
+        region: Region = Region.US,
+        lawful_basis: LawfulBasis | None = None,
+        legal_reference: str | None = None,
     ) -> Consent:
         subject = self._subject(subject_id)
         if not signed_name.strip():
@@ -89,9 +124,15 @@ class ScreeningService:
             purpose=purpose,
             authorized_checks=list(checks),
             signed_name=signed_name.strip(),
-            disclosure_text=self.disclosure_for(requester, purpose, checks),
+            disclosure_text=self.disclosure_for(
+                requester, purpose, checks,
+                region=region, lawful_basis=lawful_basis, legal_reference=legal_reference,
+            ),
             signed_at=signed_at,
             expires_at=signed_at + timedelta(days=valid_days),
+            region=region,
+            lawful_basis=lawful_basis,
+            legal_reference=legal_reference,
         )
         self.store.save_consent(consent)
         self.store.audit(
@@ -101,7 +142,8 @@ class ScreeningService:
             consent_id=consent.consent_id,
             purpose=purpose.value,
             checks=[c.value for c in checks],
-            signed_name=consent.signed_name,
+            region=region.value,
+            lawful_basis=lawful_basis.value if lawful_basis else None,
         )
         return consent
 
@@ -113,6 +155,116 @@ class ScreeningService:
         self.store.save_consent(consent)
         self.store.audit(actor, "consent.revoked", consent.subject_id, consent_id=consent_id)
         return consent
+
+    # web flow: request -> subject signs via link -> run ---------------------
+
+    def create_request(
+        self,
+        *,
+        requester: str,
+        subject: Subject,
+        purpose: PermissiblePurpose,
+        checks: list[CheckType],
+        purpose_statement: str,
+        region: Region = Region.US,
+        lawful_basis: LawfulBasis | None = None,
+        legal_reference: str | None = None,
+    ) -> ScreeningRequest:
+        """Register the subject and create a signing link for them.
+
+        Runs the guardrails up front against a draft consent, so a request
+        that could never be run is refused before the subject is bothered.
+        """
+        draft = Consent(
+            subject_id=subject.subject_id, purpose=purpose, authorized_checks=list(checks),
+            signed_name="(draft)", disclosure_text="", region=region,
+            lawful_basis=lawful_basis, legal_reference=legal_reference,
+        )
+        authorize_check(
+            subject=subject, consent=draft, requester=requester, purpose=purpose,
+            purpose_statement=purpose_statement, checks=list(checks),
+        )
+        self.register_subject(subject, actor=requester)
+        req = ScreeningRequest(
+            requester=requester, subject_id=subject.subject_id, purpose=purpose,
+            checks=list(checks), purpose_statement=purpose_statement.strip(), region=region,
+            lawful_basis=lawful_basis, legal_reference=legal_reference,
+            consent_token=secrets.token_urlsafe(24),
+        )
+        self.store.save_request(req)
+        self.store.audit(
+            requester, "request.created", subject.subject_id,
+            request_id=req.request_id, purpose=purpose.value,
+            purpose_statement=req.purpose_statement, checks=[c.value for c in checks],
+        )
+        return req
+
+    def request_by_token(self, token: str) -> tuple[ScreeningRequest, Subject, str]:
+        req = self.store.request_by_token(token or "")
+        if req is None:
+            raise NotFound("This link is not valid.")
+        subject = self._subject(req.subject_id)
+        text = self.disclosure_for(
+            req.requester, req.purpose, req.checks, region=req.region,
+            lawful_basis=req.lawful_basis, legal_reference=req.legal_reference,
+        )
+        return req, subject, text
+
+    def sign_request(self, token: str, *, signed_name: str) -> ScreeningRequest:
+        req, subject, _ = self.request_by_token(token)
+        if req.state != "awaiting_signature":
+            raise ValueError("This request has already been answered.")
+        from .adapters import normalize_name
+
+        if normalize_name(signed_name) != normalize_name(subject.full_name):
+            raise ValueError("Type your full name exactly as shown to sign.")
+        consent = self.record_consent(
+            subject_id=subject.subject_id, requester=req.requester, purpose=req.purpose,
+            checks=req.checks, signed_name=signed_name, region=req.region,
+            lawful_basis=req.lawful_basis, legal_reference=req.legal_reference,
+        )
+        req.consent_id = consent.consent_id
+        self.store.save_request(req)
+        return req
+
+    def decline_request(self, token: str) -> None:
+        """The subject says no. Their data is erased straight away."""
+        req, subject, _ = self.request_by_token(token)
+        if req.state != "awaiting_signature":
+            raise ValueError("This request has already been answered.")
+        self.store.audit("subject", "request.declined", subject.subject_id, request_id=req.request_id)
+        self.store.erase_subject(subject.subject_id)
+
+    def run_request(self, request_id: str, *, requester: str) -> Report:
+        req = self.store.get_request(request_id)
+        if req is None or req.requester != requester:
+            raise NotFound(request_id)
+        if req.state != "signed":
+            raise GuardrailError("The subject has not signed this request yet.")
+        report = self.run_check(
+            subject_id=req.subject_id, consent_id=req.consent_id, requester=requester,
+            purpose=req.purpose, purpose_statement=req.purpose_statement, checks=req.checks,
+        )
+        req.report_id = report.report_id
+        self.store.save_request(req)
+        return report
+
+    # erasure and retention --------------------------------------------------
+
+    def erase_my_data(self, report_id: str, *, access_token: str) -> None:
+        """Right to erasure: the subject deletes everything held about them."""
+        report = self._subject_report(report_id, access_token)
+        self.store.audit("subject", "subject.erased", report.subject_id, report_id=report_id, by="subject")
+        self.store.erase_subject(report.subject_id)
+
+    def purge_expired(self, *, retention_days: int = DEFAULT_RETENTION_DAYS, actor: str = "system") -> int:
+        """Erase subjects whose reports are past the retention period."""
+        cutoff = (now() - timedelta(days=retention_days)).isoformat()
+        subjects = {r.subject_id for r in self.store.reports_older_than(cutoff)}
+        for sid in subjects:
+            self.store.audit(actor, "subject.erased", sid, reason=f"retention {retention_days} days")
+            self.store.erase_subject(sid)
+        return len(subjects)
 
     # running a check --------------------------------------------------------
 

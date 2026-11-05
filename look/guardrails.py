@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import CheckType, Consent, PermissiblePurpose, Subject
+from .models import CheckType, Consent, LawfulBasis, PermissiblePurpose, Region, Subject
 
 
 class GuardrailError(Exception):
@@ -79,6 +79,43 @@ PURPOSE_ALLOWED_CHECKS: dict[PermissiblePurpose, frozenset[CheckType]] = {
 
 MIN_PURPOSE_STATEMENT_LEN = 20
 
+# Checks that process personal data relating to criminal convictions and
+# offences (GDPR Article 10).
+CRIMINAL_DATA_CHECKS = frozenset({CheckType.SEX_OFFENDER_REGISTRY, CheckType.COURT_RECORDS})
+
+EU_CRIMINAL_DATA_REFUSAL = (
+    "Under GDPR Article 10, criminal record checks are only allowed where a specific "
+    "EU or national law authorises them. Choose the 'legal obligation' basis and cite "
+    "that law, or ask the candidate to request their own official certificate "
+    "(for example a Führungszeugnis, VOG, extrait de casier judiciaire, or certificado "
+    "de antecedentes penales) instead."
+)
+
+EMPLOYMENT_LIKE = frozenset(
+    {
+        PermissiblePurpose.EMPLOYMENT,
+        PermissiblePurpose.VOLUNTEER_SCREENING,
+        PermissiblePurpose.TENANT_SCREENING,
+    }
+)
+
+
+def check_eu_rules(consent: Consent, purpose: PermissiblePurpose, checks: list[CheckType]) -> None:
+    """GDPR rules on top of the general ones. Raises GuardrailError."""
+    if consent.lawful_basis is None:
+        raise GuardrailError("EU checks need a GDPR lawful basis (Article 6).")
+    if consent.lawful_basis == LawfulBasis.CONSENT and purpose in EMPLOYMENT_LIKE:
+        raise GuardrailError(
+            "Consent is not a valid GDPR basis where there is an imbalance of power, such as "
+            "employment or housing (EDPB Guidelines 05/2020). Use legitimate interests, "
+            "contract, or legal obligation; the subject's signature is still recorded."
+        )
+    if consent.lawful_basis == LawfulBasis.LEGAL_OBLIGATION and not (consent.legal_reference or "").strip():
+        raise GuardrailError("Cite the law that creates the legal obligation.")
+    if any(c in CRIMINAL_DATA_CHECKS for c in checks):
+        if consent.lawful_basis != LawfulBasis.LEGAL_OBLIGATION:
+            raise GuardrailError(EU_CRIMINAL_DATA_REFUSAL)
+
 
 def authorize_check(
     *,
@@ -119,6 +156,8 @@ def authorize_check(
             f"Not permitted for purpose '{purpose.value}': "
             + ", ".join(c.value for c in not_allowed)
         )
+    if consent.region == Region.EU:
+        check_eu_rules(consent, purpose, checks)
     if CheckType.PROFESSIONAL_LICENSE in checks and not subject.license_number:
         raise GuardrailError("A license check needs the subject's license number.")
 

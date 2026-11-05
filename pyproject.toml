@@ -5,6 +5,9 @@ description = "Consent-based background screening from official public records"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+web = ["flask>=3.0", "gunicorn>=22.0"]
+
 [project.scripts]
 look = "look.cli:main"
 

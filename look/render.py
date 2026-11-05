@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .models import DisputeStatus, Report, Subject
+from .models import DisputeStatus, Region, Report, Subject
 from .service import ScreeningService
 
 SUBJECT_RIGHTS = """\
@@ -21,6 +21,25 @@ YOUR RIGHTS
 - If you are in the US, this mirrors your rights under the Fair Credit Reporting
   Act (FCRA). See https://www.consumerfinance.gov/consumer-tools/background-checks/
 """
+
+EU_SUBJECT_RIGHTS = """\
+YOUR RIGHTS UNDER THE GDPR
+- Access (Art. 15): this report and the access log show everything held about you.
+- Rectification (Art. 16): dispute anything inaccurate:
+    look dispute open --report {report_id} --code <your access code> \\
+        [--finding <finding id>] --reason "what is wrong"
+- Erasure (Art. 17): delete everything held about you:
+    look report erase --report {report_id} --code <your access code>
+- Objection (Art. 21) and complaint: you can object to this processing and complain
+  to your national data protection authority (see https://edpb.europa.eu/about-edpb/about-edpb/members_en).
+- Every result above is a POSSIBLE match from an official public record and has not
+  been confirmed. No decision about you should be based on it without human review.
+- This report is deleted automatically after the retention period.
+"""
+
+
+def subject_rights_text(region: Region, report_id: str) -> str:
+    return (EU_SUBJECT_RIGHTS if region == Region.EU else SUBJECT_RIGHTS).format(report_id=report_id)
 
 
 def render_report(service: ScreeningService, report: Report, subject: Subject, *, for_subject: bool) -> str:
@@ -65,7 +84,8 @@ def render_report(service: ScreeningService, report: Report, subject: Subject, *
 
     lines.append("")
     if for_subject:
-        lines.append(SUBJECT_RIGHTS.format(report_id=report.report_id))
+        consent = service.store.get_consent(report.consent_id)
+        lines.append(subject_rights_text(consent.region if consent else Region.US, report.report_id))
     else:
         lines.append(
             "REQUESTER NOTICE: possible matches are not verified. Before taking any adverse\n"

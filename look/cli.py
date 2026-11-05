@@ -10,7 +10,7 @@ from datetime import date
 
 from .adapters import default_adapters, mock_adapters
 from .guardrails import GuardrailError
-from .models import CheckType, PermissiblePurpose, Subject
+from .models import CheckType, LawfulBasis, PermissiblePurpose, Region, Subject
 from .render import render_report
 from .service import AccessDenied, NotFound, ScreeningService
 from .store import Store
@@ -37,6 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="look", description="Consent-based background screening.")
     p.add_argument("--db", default=os.environ.get("LOOK_DB", "look.db"), help="SQLite file (default look.db)")
     p.add_argument("--mock", action="store_true", help="use mock sources instead of real public records")
+    p.add_argument("--region", type=Region, default=Region(os.environ.get("LOOK_REGION", "us")),
+                   help="us (FCRA rules) or eu (GDPR rules); default from LOOK_REGION")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("subject", help="register the person to be screened").add_subparsers(dest="sub", required=True)
@@ -61,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--checks", required=True, type=_checks)
     cr.add_argument("--signed-name", required=True, help="the subject's signature")
     cr.add_argument("--days", type=int, default=90, help="how long the consent is valid")
+    cr.add_argument("--lawful-basis", type=LawfulBasis, help="GDPR Art. 6 basis (required with --region eu)")
+    cr.add_argument("--legal-reference", help="the law that requires or authorises the check")
+    cd.add_argument("--lawful-basis", type=LawfulBasis)
+    cd.add_argument("--legal-reference")
     cv = c.add_parser("revoke")
     cv.add_argument("--consent", required=True)
     cv.add_argument("--actor", required=True)
@@ -84,6 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
     rl = r.add_parser("access-log", help="subject: everyone who checked you, and why")
     rl.add_argument("--report", required=True)
     rl.add_argument("--code", required=True)
+    re_ = r.add_parser("erase", help="subject: delete everything held about you")
+    re_.add_argument("--report", required=True)
+    re_.add_argument("--code", required=True)
 
     d = sub.add_parser("dispute", help="dispute a report or resolve a dispute").add_subparsers(dest="sub", required=True)
     do = d.add_parser("open")
@@ -103,13 +112,36 @@ def build_parser() -> argparse.ArgumentParser:
     al = a.add_parser("list")
     al.add_argument("--subject")
     a.add_parser("verify", help="check that the log has not been tampered with")
+
+    pg = sub.add_parser("purge", help="erase subjects whose reports are past the retention period")
+    pg.add_argument("--days", type=int, default=180)
+
+    u = sub.add_parser("user", help="manage web app logins").add_subparsers(dest="sub", required=True)
+    ua = u.add_parser("add")
+    ua.add_argument("--username", required=True)
+    ua.add_argument("--role", choices=["requester", "reviewer"], required=True)
+
+    sv = sub.add_parser("serve", help="run the web app")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8000)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    adapters = mock_adapters() if args.mock else default_adapters(args.region.value)
+    if args.cmd == "serve":
+        from .web import create_app
+
+        if not os.environ.get("LOOK_SECRET_KEY"):
+            print("Warning: set LOOK_SECRET_KEY so logins survive a restart.", file=sys.stderr)
+        if args.host in ("127.0.0.1", "localhost"):
+            os.environ.setdefault("LOOK_INSECURE_COOKIES", "1")  # plain http on your own machine
+        app = create_app(db_path=args.db, region=args.region, adapters=adapters)
+        app.run(host=args.host, port=args.port)
+        return 0
     store = Store(args.db)
-    svc = ScreeningService(store, mock_adapters() if args.mock else default_adapters())
+    svc = ScreeningService(store, adapters)
     try:
         return _dispatch(args, svc, store)
     except (GuardrailError, AccessDenied) as e:
@@ -121,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace, svc: ScreeningService, store: Store) -> int:
-    cmd = (args.cmd, args.sub)
+    cmd = (args.cmd, getattr(args, "sub", None))
     if cmd == ("subject", "add"):
         s = svc.register_subject(
             Subject(
@@ -136,7 +168,8 @@ def _dispatch(args: argparse.Namespace, svc: ScreeningService, store: Store) -> 
         )
         print(s.subject_id)
     elif cmd == ("consent", "disclosure"):
-        print(svc.disclosure_for(args.requester, args.purpose, args.checks))
+        print(svc.disclosure_for(args.requester, args.purpose, args.checks, region=args.region,
+                                 lawful_basis=args.lawful_basis, legal_reference=args.legal_reference))
     elif cmd == ("consent", "record"):
         c = svc.record_consent(
             subject_id=args.subject,
@@ -145,6 +178,9 @@ def _dispatch(args: argparse.Namespace, svc: ScreeningService, store: Store) -> 
             checks=args.checks,
             signed_name=args.signed_name,
             valid_days=args.days,
+            region=args.region,
+            lawful_basis=args.lawful_basis,
+            legal_reference=args.legal_reference,
         )
         print(c.consent_id)
     elif cmd == ("consent", "revoke"):
@@ -172,6 +208,19 @@ def _dispatch(args: argparse.Namespace, svc: ScreeningService, store: Store) -> 
         for e in svc.subject_access_log(args.report, access_token=args.code):
             why = e["detail"].get("purpose_statement", "")
             print(f"{e['ts']}  {e['actor']:<24} {e['action']:<28} {why}")
+    elif cmd == ("report", "erase"):
+        svc.erase_my_data(args.report, access_token=args.code)
+        print("erased")
+    elif cmd == ("purge", None):
+        print(f"erased {svc.purge_expired(retention_days=args.days)} subject(s)")
+    elif cmd == ("user", "add"):
+        import getpass
+
+        from .web import add_user
+
+        pw = os.environ.get("LOOK_NEW_PASSWORD") or getpass.getpass("Password: ")
+        add_user(store, args.username, pw, args.role)
+        print(f"saved {args.role} {args.username}")
     elif cmd == ("dispute", "open"):
         dsp = svc.open_dispute(args.report, access_token=args.code, finding_id=args.finding, reason=args.reason)
         print(dsp.dispute_id)

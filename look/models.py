@@ -32,6 +32,27 @@ class PermissiblePurpose(str, Enum):
     SUBJECT_SELF_REQUEST = "subject_self_request"
 
 
+class Region(str, Enum):
+    """Which legal regime the check runs under."""
+
+    US = "us"  # FCRA-style rules
+    EU = "eu"  # GDPR rules
+
+
+class LawfulBasis(str, Enum):
+    """GDPR Article 6 lawful bases that can apply to screening.
+
+    Consent is listed, but for employment it is usually not "freely given"
+    (EDPB Guidelines 05/2020), so EU employment checks need another basis.
+    The subject's signature is still collected as their acknowledgement.
+    """
+
+    CONSENT = "consent"
+    CONTRACT = "contract"
+    LEGAL_OBLIGATION = "legal_obligation"
+    LEGITIMATE_INTERESTS = "legitimate_interests"
+
+
 class CheckType(str, Enum):
     SANCTIONS = "sanctions"
     SEX_OFFENDER_REGISTRY = "sex_offender_registry"
@@ -82,6 +103,9 @@ class Consent:
     signed_at: datetime = field(default_factory=now)
     expires_at: datetime | None = None
     revoked_at: datetime | None = None
+    region: Region = Region.US
+    lawful_basis: LawfulBasis | None = None  # required in the EU
+    legal_reference: str | None = None  # the law that requires or authorises the check
     consent_id: str = field(default_factory=lambda: new_id("cons"))
 
     def is_active(self, at: datetime | None = None) -> bool:
@@ -103,6 +127,9 @@ class Consent:
             "signed_at": self.signed_at.isoformat(),
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
+            "region": self.region.value,
+            "lawful_basis": self.lawful_basis.value if self.lawful_basis else None,
+            "legal_reference": self.legal_reference,
         }
 
     @classmethod
@@ -117,6 +144,9 @@ class Consent:
             signed_at=datetime.fromisoformat(d["signed_at"]),
             expires_at=datetime.fromisoformat(d["expires_at"]) if d.get("expires_at") else None,
             revoked_at=datetime.fromisoformat(d["revoked_at"]) if d.get("revoked_at") else None,
+            region=Region(d.get("region", "us")),
+            lawful_basis=LawfulBasis(d["lawful_basis"]) if d.get("lawful_basis") else None,
+            legal_reference=d.get("legal_reference"),
         )
 
 
@@ -274,4 +304,75 @@ class Dispute:
             resolution_note=d.get("resolution_note"),
             resolved_by=d.get("resolved_by"),
             resolved_at=datetime.fromisoformat(d["resolved_at"]) if d.get("resolved_at") else None,
+        )
+
+
+@dataclass
+class ScreeningRequest:
+    """A requester's request to screen someone, waiting for the subject to sign.
+
+    The subject signs through a private link (consent_token), so the
+    requester can never record consent on the subject's behalf in the web app.
+    """
+
+    requester: str
+    subject_id: str
+    purpose: PermissiblePurpose
+    checks: list[CheckType]
+    purpose_statement: str
+    region: Region = Region.US
+    lawful_basis: LawfulBasis | None = None
+    legal_reference: str | None = None
+    consent_token: str = ""
+    consent_id: str | None = None
+    report_id: str | None = None
+    declined: bool = False
+    created_at: datetime = field(default_factory=now)
+    request_id: str = field(default_factory=lambda: new_id("req"))
+
+    @property
+    def state(self) -> str:
+        if self.declined:
+            return "declined"
+        if self.report_id:
+            return "complete"
+        if self.consent_id:
+            return "signed"
+        return "awaiting_signature"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "requester": self.requester,
+            "subject_id": self.subject_id,
+            "purpose": self.purpose.value,
+            "checks": [c.value for c in self.checks],
+            "purpose_statement": self.purpose_statement,
+            "region": self.region.value,
+            "lawful_basis": self.lawful_basis.value if self.lawful_basis else None,
+            "legal_reference": self.legal_reference,
+            "consent_token": self.consent_token,
+            "consent_id": self.consent_id,
+            "report_id": self.report_id,
+            "declined": self.declined,
+            "created_at": self.created_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ScreeningRequest":
+        return cls(
+            request_id=d["request_id"],
+            requester=d["requester"],
+            subject_id=d["subject_id"],
+            purpose=PermissiblePurpose(d["purpose"]),
+            checks=[CheckType(c) for c in d["checks"]],
+            purpose_statement=d["purpose_statement"],
+            region=Region(d["region"]),
+            lawful_basis=LawfulBasis(d["lawful_basis"]) if d.get("lawful_basis") else None,
+            legal_reference=d.get("legal_reference"),
+            consent_token=d["consent_token"],
+            consent_id=d.get("consent_id"),
+            report_id=d.get("report_id"),
+            declined=d.get("declined", False),
+            created_at=datetime.fromisoformat(d["created_at"]),
         )
