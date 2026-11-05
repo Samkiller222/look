@@ -15,6 +15,8 @@ services:
         value: eu
       - key: LOOK_SECRET_KEY
         generateValue: true
+      - key: LOOK_BEHIND_PROXY   # Render terminates HTTPS; trust its forwarded headers
+        value: "1"
       - key: LOOK_RETENTION_DAYS
         value: "180"
       # First logins; each gets a random password printed once in the logs.
