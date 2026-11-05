@@ -1,0 +1,5 @@
+{$LOOK_DOMAIN} {
+	encode gzip
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	reverse_proxy app:8000
+}

@@ -92,6 +92,18 @@ is nowhere to keep logins, signatures, the audit log, or API keys. Split it:
   `python -m look user add --username you@example.com --role requester`.
   `LOOK_RETENTION_DAYS` makes the app delete old reports once a day.
 
+- **Or your own VPS.** On a fresh Ubuntu server in the EU (Hetzner, OVH,
+  Scaleway), with your domain's DNS pointing at it, run as root:
+
+  ```sh
+  git clone -b claude/project-thread-j1ko5n https://github.com/Samkiller222/look.git /opt/look
+  bash /opt/look/deploy/setup.sh check.example.com
+  ```
+
+  It installs Docker, a firewall, automatic security updates and fail2ban,
+  turns off SSH password logins if you use keys, starts the app behind Caddy
+  (automatic HTTPS), and backs the database up daily to `/var/backups/look`.
+
 Any other host that runs Docker works too, behind HTTPS:
 
 ```sh

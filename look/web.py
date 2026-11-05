@@ -58,6 +58,11 @@ def create_app(
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("LOOK_INSECURE_COOKIES") != "1",
     )
+    if os.environ.get("LOOK_BEHIND_PROXY") == "1":
+        # Trust the reverse proxy's X-Forwarded-* headers so links use https.
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     adapter_list = adapters if adapters is not None else default_adapters(app.config["REGION"].value)
 
     def svc() -> ScreeningService:
